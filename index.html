@@ -16,6 +16,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
   :root{
     --navy-deep:#0a1f2e;
@@ -502,6 +503,12 @@
           Gem parti
         </button>
       </div>
+      <div class="btn-row" style="margin-top:10px;">
+        <button class="btn btn-secondary" id="shareBtn" onclick="shareAsPdf()" style="flex:1;">
+          <svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 10.5l6.8-3.9M8.6 13.5l6.8 3.9"/></svg>
+          <span id="shareBtnLabel">Del som PDF / e-mail</span>
+        </button>
+      </div>
       <div style="text-align:center; margin-top:10px;">
         <button class="btn btn-ghost" onclick="clearForm()">Ryd formular</button>
       </div>
@@ -830,6 +837,112 @@ function clearForm(){
   });
   window.__editId = null;
   updatePreview();
+}
+
+/* ---------- PDF / del via e-mail ---------- */
+function loadImageAsDataURL(url){
+  return fetch(url)
+    .then(r => { if(!r.ok) throw new Error('QR-billede kunne ikke hentes'); return r.blob(); })
+    .then(blob => new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    }));
+}
+
+async function shareAsPdf(){
+  const {data, included} = getFormData();
+  if(!Object.values(data).some(v=>v)){ showToast('Udfyld mindst ét felt først'); return; }
+
+  if(!(window.jspdf && window.jspdf.jsPDF)){
+    showToast('PDF-funktion kunne ikke indlæses (kræver internet)');
+    return;
+  }
+
+  const btn = document.getElementById('shareBtn');
+  const label = document.getElementById('shareBtnLabel');
+  const prevLabel = label.textContent;
+  btn.disabled = true;
+  label.textContent = 'Laver PDF…';
+
+  try{
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit:'mm', format:'a4' });
+    const pageW = 210;
+
+    // header bar
+    doc.setFillColor(22,67,99);
+    doc.rect(0,0,pageW,30,'F');
+    try{ doc.addImage(LOGO_SRC,'JPEG',16,8,26,10); }catch(e){}
+    doc.setTextColor(255,255,255);
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(15);
+    doc.text('Parti-information', pageW-16, 15, {align:'right'});
+    doc.setFontSize(9);
+    doc.setFont('helvetica','normal');
+    doc.text('NTF A/S', pageW-16, 21, {align:'right'});
+
+    // field rows
+    let y = 46;
+    doc.setTextColor(20,37,49);
+    FIELD_DEFS.forEach(f=>{
+      if(included[f.id] && data[f.id]){
+        doc.setFont('helvetica','bold');
+        doc.setFontSize(9);
+        doc.setTextColor(120,140,150);
+        doc.text(f.label.toUpperCase(), 16, y);
+        doc.setFont('helvetica','bold');
+        doc.setFontSize(12.5);
+        doc.setTextColor(20,37,49);
+        const lines = doc.splitTextToSize(String(data[f.id]), pageW-32);
+        doc.text(lines, 16, y+6);
+        y += 6 + (lines.length*5.5) + 4;
+        doc.setDrawColor(228,233,236);
+        doc.line(16, y-2, pageW-16, y-2);
+      }
+    });
+
+    // QR code
+    try{
+      const qrUrl = buildQrUrl(data).replace('size=200x200','size=400x400');
+      const qrData = await loadImageAsDataURL(qrUrl);
+      const qrSize = 46;
+      doc.addImage(qrData, 'PNG', (pageW-qrSize)/2, y+6, qrSize, qrSize);
+      y += 6 + qrSize + 8;
+      doc.setFontSize(8.5);
+      doc.setTextColor(140,155,163);
+      doc.text('Scan for fuld parti-information', pageW/2, y, {align:'center'});
+    }catch(e){ /* fortsæt uden QR hvis den ikke kan hentes */ }
+
+    doc.setFontSize(7.5);
+    doc.setTextColor(170,180,186);
+    doc.text('Genereret ' + new Date().toLocaleString('da-DK'), 16, 287);
+
+    const fileName = 'parti-' + (data.pon || data.produktnr || Date.now()) + '.pdf';
+    const pdfBlob = doc.output('blob');
+    const file = new File([pdfBlob], fileName, {type:'application/pdf'});
+
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({
+        files:[file],
+        title:'Parti-information',
+        text:'Parti-information fra NTF A/S'
+      });
+    } else {
+      doc.save(fileName);
+      showToast('PDF gemt — vedhæft den i din mail-app');
+    }
+  } catch(err){
+    if(err && err.name === 'AbortError'){
+      // brugeren fortrød delingen — ingen fejlbesked nødvendig
+    } else {
+      showToast('Kunne ikke dele PDF: ' + (err && err.message ? err.message : 'ukendt fejl'));
+    }
+  } finally {
+    btn.disabled = false;
+    label.textContent = prevLabel;
+  }
 }
 
 /* ---------- tabs ---------- */
